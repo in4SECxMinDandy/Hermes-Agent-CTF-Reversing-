@@ -262,3 +262,5 @@ scripts/run_tests.sh
 MIT — see [LICENSE](LICENSE).
 
 Built by [Nous Research](https://nousresearch.com).
+
+# Hermes-Agent-CTF-Reversing-
