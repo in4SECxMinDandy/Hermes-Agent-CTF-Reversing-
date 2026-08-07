@@ -36,6 +36,18 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
+## Choose the Project Test Command
+
+The commands below use pytest as a Python example. Before starting RED, read
+the repository's `pyproject.toml`, `package.json`, `Makefile`, or documented
+test script and use that project's canonical runner. Do not introduce pytest
+commands into a JavaScript/TypeScript or non-Python project by assumption.
+
+When the project declares multiple supported operating systems, run the
+focused regression test on each affected OS before marking the work complete.
+For a Windows-only smoke run, use `python -m pytest ...` or the project's
+native command from PowerShell rather than a Bash-only loop.
+
 ## The Iron Law
 
 ```

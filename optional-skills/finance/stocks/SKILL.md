@@ -85,6 +85,9 @@ Crypto prices. Pass `BTC` (the script appends `-USD` automatically).
   crumb session isn't established. Set `ALPHA_VANTAGE_KEY` to backfill.
 - Add a small delay between bulk requests to avoid rate-limiting.
 - This is read-only — no order placement, no account integration.
+- Include the data timestamp and say that Yahoo's unofficial feed may be stale
+  or incomplete. Quotes and ratios are market data, not personalized
+  investment advice; do not turn them into a buy/sell recommendation.
 
 ## Verification
 

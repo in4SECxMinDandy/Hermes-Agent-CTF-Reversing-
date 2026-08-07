@@ -53,6 +53,13 @@ todo([
 
 **Key:** Read the plan ONCE. Extract everything. Don't make subagents read the plan file — provide the full task text directly in context.
 
+### Preflight: Preserve the User's Worktree
+
+Before dispatching an implementer, run `git status --short` and identify the
+files the task is allowed to change. Treat existing uncommitted changes as
+user-owned unless the task explicitly includes them. Give reviewers that file
+list, and stage only reviewed task files at commit time.
+
 ### 2. Per-Task Workflow
 
 For EACH task in the plan:
@@ -77,7 +84,7 @@ delegate_task(
     3. Write minimal implementation
     4. Run: pytest tests/models/test_user.py -v (verify PASS)
     5. Run: pytest tests/ -q (verify no regressions)
-    6. Commit: git add -A && git commit -m "feat: add User model with password hashing"
+    6. Commit only the listed files: git add tests/models/test_user.py src/models/user.py && git commit -m "feat: add User model with password hashing"
 
     PROJECT CONTEXT:
     - Python 3.11, Flask app in src/app.py
@@ -183,8 +190,9 @@ pytest tests/ -q
 # Review all changes
 git diff --stat
 
-# Final commit if needed
-git add -A && git commit -m "feat: complete [feature name] implementation"
+# Final commit if needed (stage only files reviewed by the agent)
+git add <reviewed-file-1> <reviewed-file-2>
+git commit -m "feat: complete [feature name] implementation"
 ```
 
 ## Task Granularity

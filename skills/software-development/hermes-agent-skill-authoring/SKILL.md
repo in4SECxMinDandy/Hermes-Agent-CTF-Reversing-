@@ -18,13 +18,13 @@ metadata:
 There are two places a SKILL.md can live:
 
 1. **User-local:** `~/.hermes/skills/<maybe-category>/<name>/SKILL.md` — personal, not shared. Created via `skill_manage(action='create')`.
-2. **In-repo (this skill is about this case):** `/home/bb/hermes-agent/skills/<category>/<name>/SKILL.md` — committed, shipped with the package. Use `write_file` + `git add`. `skill_manage(action='create')` does NOT target this tree.
+2. **In-repo (this skill is about this case):** `skills/<category>/<name>/SKILL.md` relative to the active workspace — committed, shipped with the package. Use `write_file` + a targeted `git add`. `skill_manage(action='create')` does NOT target this tree.
 
 ## When to Use
 
 - User asks you to add a skill "in this branch / repo / commit"
 - You're committing a reusable workflow that should ship with hermes-agent
-- You're editing an existing skill under `/home/bb/hermes-agent/skills/` (use `patch` for small edits, `write_file` for rewrites; `skill_manage` still works for patch on in-repo skills, but not for `create`)
+- You're editing an existing skill under `skills/` in the active workspace (use `patch` for small edits, `write_file` for rewrites; `skill_manage` still works for patch on in-repo skills, but not for `create`)
 
 ## Required Frontmatter
 
@@ -151,8 +151,9 @@ Pick the closest existing category. Don't invent new top-level categories casual
    assert len(fm["description"]) <= 1024
    assert len(content) <= 100_000
    ```
-5. **Git add + commit** on the active branch.
-6. **Note:** the CURRENT session's skill loader is cached — `skill_view` / `skills_list` will not see the new skill until a new session. This is expected, not a bug.
+5. **Run the repository validator**: `python scripts/validate_skills.py --strict`.
+6. **Git add only the skill files + commit** on the active branch. Never use `git add -A` from an agent workflow; it can stage unrelated user changes.
+7. **Note:** the CURRENT session's skill loader is cached — `skill_view` / `skills_list` will not see the new skill until a new session. This is expected, not a bug.
 
 ## Cross-Referencing Other Skills
 

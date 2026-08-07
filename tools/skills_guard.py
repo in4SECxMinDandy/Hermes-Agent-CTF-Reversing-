@@ -34,6 +34,19 @@ from typing import List, Tuple
 
 SCANNER_VERSION = "skills-guard-v1"
 
+_TEXT_SUFFIXES = frozenset({
+    ".bash", ".c", ".cc", ".cpp", ".css", ".csv", ".html", ".ini",
+    ".js", ".json", ".md", ".py", ".rb", ".rst", ".sh", ".sql",
+    ".tex", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
+})
+
+
+def canonical_skill_bytes(path: str | Path, data: bytes) -> bytes:
+    """Make text content hashes stable across POSIX and Windows checkouts."""
+    if Path(path).suffix.lower() in _TEXT_SUFFIXES:
+        return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return data
+
 
 
 
@@ -667,7 +680,7 @@ def scan_skill(skill_path: Path, source: str = "community") -> ScanResult:
         # Pattern scanning on each file
         for f in skill_path.rglob("*"):
             if f.is_file():
-                rel = str(f.relative_to(skill_path))
+                rel = f.relative_to(skill_path).as_posix()
                 if ignore(rel):
                     continue
                 all_findings.extend(scan_file(f, rel))
@@ -692,13 +705,16 @@ def _content_digest(skill_path: Path) -> str:
     """Canonical SHA-256 over relative paths and exact file bytes."""
     h = hashlib.sha256()
     if skill_path.is_dir():
-        for file_path in sorted(skill_path.rglob("*")):
-            if file_path.is_file():
-                rel = file_path.relative_to(skill_path).as_posix()
-                h.update(rel.encode("utf-8") + b"\x00")
-                h.update(file_path.read_bytes())
+        files = sorted(
+            (f for f in skill_path.rglob("*") if f.is_file()),
+            key=lambda f: f.relative_to(skill_path).as_posix(),
+        )
+        for file_path in files:
+            rel = file_path.relative_to(skill_path).as_posix()
+            h.update(rel.encode("utf-8") + b"\x00")
+            h.update(canonical_skill_bytes(file_path, file_path.read_bytes()))
     else:
-        h.update(skill_path.read_bytes())
+        h.update(canonical_skill_bytes(skill_path, skill_path.read_bytes()))
     return h.hexdigest()
 
 
@@ -888,7 +904,7 @@ def _check_structure(skill_dir: Path, ignore=None) -> List[Finding]:
         if not f.is_file() and not f.is_symlink():
             continue
 
-        rel = str(f.relative_to(skill_dir))
+        rel = f.relative_to(skill_dir).as_posix()
         if ignore(rel):
             continue
         file_count += 1

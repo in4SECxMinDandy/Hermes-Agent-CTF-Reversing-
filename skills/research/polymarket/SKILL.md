@@ -75,3 +75,12 @@ Generous — unlikely to hit for normal usage:
 - Trading requires wallet-based crypto authentication (EIP-712 signatures)
 - Some new markets may have empty price history
 - Geographic restrictions apply to trading but read-only data is globally accessible
+
+## Safety and Interpretation
+
+- Treat prices as market-implied probabilities, not facts or forecasts.
+- Always include the retrieval time and source endpoint; markets can change
+  between the query and the user's decision.
+- Do not recommend a bet, trade, leverage, or wallet action. If the user asks
+  for personalized financial advice, state the limitation and keep the output
+  to neutral market data.

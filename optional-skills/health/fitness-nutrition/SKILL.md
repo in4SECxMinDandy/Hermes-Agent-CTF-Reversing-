@@ -30,6 +30,15 @@ required_environment_variables:
 Expert fitness coach and sports nutritionist skill. Two data sources
 plus offline calculators — everything a gym-goer needs in one place.
 
+## Safety Boundary
+
+This skill provides general fitness information, not diagnosis or medical
+treatment. Do not prescribe around injuries, pregnancy, eating disorders,
+medications, or chronic disease; recommend a qualified clinician when those
+conditions are involved. Treat BMI, body-fat, TDEE, and one-rep-max outputs as
+rough estimates, state the assumptions, and never present them as a medical
+or guaranteed performance target.
+
 **Data sources (all free, no pip dependencies):**
 
 - **wger** (https://wger.de/api/v2/) — open exercise database, 690+ exercises with muscles, equipment, images. Public endpoints need zero authentication.

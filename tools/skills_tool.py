@@ -90,9 +90,9 @@ logger = logging.getLogger(__name__)
 # Per-session skill discovery cache.  _find_all_skills() re-reads every
 # SKILL.md on every call; with hundreds of skills this is wasteful.
 # Cache validation (mirrors hermes_cli/profiles.py::_count_skills, d5eee133e):
-#   - signature = per-dir max mtime of the dir AND its immediate children
-#     (one scandir per dir; catches skill add/remove inside categories,
-#     which does NOT bump the root dir's mtime), plus the disabled-set
+#   - signature = direct directory-entry names under each root/category
+#     (one scandir per dir; catches skill add/remove inside categories without
+#     relying on filesystem mtime precision), plus the disabled-set
 #     (config-driven — changes with no filesystem mtime bump at all)
 #   - a short TTL bounds staleness from in-place SKILL.md edits, which
 #     bump only the file's mtime, invisible to any directory signature.
@@ -106,7 +106,7 @@ _SKILLS_CACHE_KEY_FILTERED = "filtered"
 def _skills_scan_signature(dirs_to_scan, disabled) -> tuple:
     """Cheap change-signature for the skill scan inputs.
 
-    O(#dirs + #categories) stat calls, not a recursive walk. Includes the
+    O(#dirs + #categories) directory-entry reads, not a recursive walk. Includes the
     platform the scan's ``skill_matches_platform`` filter will use (read
     from ``agent.skill_utils``'s ``sys`` so test patches of that module
     are honored) — the scan result is platform-dependent.
@@ -116,23 +116,36 @@ def _skills_scan_signature(dirs_to_scan, disabled) -> tuple:
     platform = getattr(getattr(_skill_utils, "sys", None), "platform", "")
     sig = []
     for d in dirs_to_scan:
-        try:
-            m = d.stat().st_mtime
-        except OSError:
-            continue
+        # Include category directories too. A new skill under an existing
+        # category may leave the root mtime unchanged on coarse filesystems.
+        pending = [d]
         try:
             with os.scandir(d) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            em = entry.stat(follow_symlinks=False).st_mtime
-                            if em > m:
-                                m = em
-                    except OSError:
-                        continue
+                pending.extend(
+                    Path(entry.path)
+                    for entry in it
+                    if entry.is_dir(follow_symlinks=False)
+                )
         except OSError:
             pass
-        sig.append((str(d), m))
+
+        for scan_dir in pending:
+            entries = []
+            try:
+                with os.scandir(scan_dir) as it:
+                    for entry in sorted(it, key=lambda item: item.name):
+                        try:
+                            entries.append(
+                                (
+                                    entry.name,
+                                    entry.is_dir(follow_symlinks=False),
+                                )
+                            )
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+            sig.append((str(scan_dir), tuple(entries)))
     return (tuple(sig), frozenset(disabled), platform)
 
 
@@ -678,7 +691,7 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
         List of skill metadata dicts (name, description, category).
 
     Results are cached per-session; the cache is invalidated when the scan
-    signature changes (dir/category mtimes or the disabled-set) and expires
+    signature changes (directory entries or the disabled-set) and expires
     after a short TTL to bound staleness from in-place SKILL.md edits.
     """
     from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
@@ -1180,7 +1193,7 @@ def skill_view(
                     _record(None, found_md)
 
         if len(candidates) > 1:
-            paths = [str(smd) for _, smd in candidates]
+            paths = [smd.as_posix() for _, smd in candidates]
             logging.getLogger(__name__).warning(
                 "Skill name collision for '%s': %d candidates — %s",
                 name, len(candidates), "; ".join(paths),
@@ -1330,7 +1343,7 @@ def skill_view(
                 # Scan for all readable files
                 for f in skill_dir.rglob("*"):
                     if f.is_file() and f.name != "SKILL.md":
-                        rel = str(f.relative_to(skill_dir))
+                        rel = f.relative_to(skill_dir).as_posix()
                         if rel.startswith("references/"):
                             available_files["references"].append(rel)
                         elif rel.startswith("templates/"):
@@ -1414,7 +1427,7 @@ def skill_view(
             references_dir = skill_dir / "references"
             if references_dir.exists():
                 reference_files = [
-                    str(f.relative_to(skill_dir)) for f in references_dir.glob("*.md")
+                    f.relative_to(skill_dir).as_posix() for f in references_dir.glob("*.md")
                 ]
 
             templates_dir = skill_dir / "templates"
@@ -1430,7 +1443,7 @@ def skill_view(
                 ]:
                     template_files.extend(
                         [
-                            str(f.relative_to(skill_dir))
+                            f.relative_to(skill_dir).as_posix()
                             for f in templates_dir.rglob(ext)
                         ]
                     )
@@ -1440,13 +1453,13 @@ def skill_view(
             if assets_dir.exists():
                 for f in assets_dir.rglob("*"):
                     if f.is_file():
-                        asset_files.append(str(f.relative_to(skill_dir)))
+                        asset_files.append(f.relative_to(skill_dir).as_posix())
 
             scripts_dir = skill_dir / "scripts"
             if scripts_dir.exists():
                 for ext in ["*.py", "*.sh", "*.bash", "*.js", "*.ts", "*.rb"]:
                     script_files.extend(
-                        [str(f.relative_to(skill_dir)) for f in scripts_dir.glob(ext)]
+                        [f.relative_to(skill_dir).as_posix() for f in scripts_dir.glob(ext)]
                     )
 
         # Read tags/related_skills with backward compat:
@@ -1473,10 +1486,14 @@ def skill_view(
             linked_files["scripts"] = script_files
 
         try:
-            rel_path = str(skill_md.relative_to(active_skills_dir))
+            rel_path = skill_md.relative_to(active_skills_dir).as_posix()
         except ValueError:
             # External skill — use path relative to the skill's own parent dir
-            rel_path = str(skill_md.relative_to(skill_md.parent.parent)) if skill_md.parent.parent else skill_md.name
+            rel_path = (
+                skill_md.relative_to(skill_md.parent.parent).as_posix()
+                if skill_md.parent.parent
+                else skill_md.name
+            )
         skill_name = frontmatter.get(
             "name", skill_md.stem if not skill_dir else skill_dir.name
         )

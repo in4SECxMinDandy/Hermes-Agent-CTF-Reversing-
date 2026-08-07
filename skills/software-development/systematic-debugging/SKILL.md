@@ -114,8 +114,11 @@ pytest tests/test_module.py::test_name -v
 # Or run a scripted repro
 python scripts/repro_bug.py
 
-# Or run a high-repetition flaky repro
-for i in {1..100}; do pytest tests/test_flake.py::test_name -q || break; done
+# Or run a high-repetition flaky repro (portable Python example)
+python -c "import subprocess; [subprocess.run(['python', '-m', 'pytest', 'tests/test_flake.py::test_name', '-q'], check=True) for _ in range(100)]"
+
+# PowerShell equivalent when the project uses a different runner:
+1..100 | ForEach-Object { <project-test-command> ; if ($LASTEXITCODE) { break } }
 ```
 
 ### 3. Check Recent Changes

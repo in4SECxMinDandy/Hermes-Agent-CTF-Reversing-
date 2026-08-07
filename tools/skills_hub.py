@@ -35,7 +35,7 @@ import httpx
 import yaml
 
 from tools.skills_guard import (
-    ScanResult, content_hash, TRUSTED_REPOS,
+    ScanResult, canonical_skill_bytes, content_hash, TRUSTED_REPOS,
 )
 from tools.url_safety import is_safe_url
 from tools.website_policy import check_website_access
@@ -3239,9 +3239,9 @@ class OptionalSkillSource(SkillSource):
                 and "__pycache__" not in f.parts
                 and f.suffix != ".pyc"
             ):
-                rel_path = str(f.relative_to(skill_dir))
+                rel_path = f.relative_to(skill_dir).as_posix()
                 try:
-                    files[rel_path] = f.read_bytes()
+                    files[rel_path] = canonical_skill_bytes(rel_path, f.read_bytes())
                 except OSError:
                     continue
 
@@ -3255,7 +3255,7 @@ class OptionalSkillSource(SkillSource):
             name=name,
             files=files,
             source="official",
-            identifier=f"official/{skill_dir.relative_to(self._optional_dir)}",
+            identifier=f"official/{skill_dir.relative_to(self._optional_dir).as_posix()}",
             trust_level="builtin",
         )
 
@@ -3653,8 +3653,8 @@ def install_from_quarantine(
         trust_level=bundle.trust_level,
         scan_verdict=scan_result.verdict,
         skill_hash=content_hash(install_dir),
-        install_path=str(install_dir.relative_to(_skills_dir())),
-        files=list(bundle.files.keys()),
+        install_path=install_dir.relative_to(_skills_dir()).as_posix(),
+        files=[Path(path).as_posix() for path in bundle.files],
         metadata=bundle.metadata,
         scan_provenance=scan_provenance or getattr(scan_result, "scan_provenance", None),
     )
@@ -3701,16 +3701,22 @@ def uninstall_skill(skill_name: str) -> Tuple[bool, str]:
 def bundle_content_hash(bundle: SkillBundle) -> str:
     """Compute a deterministic hash for an in-memory skill bundle."""
     h = hashlib.sha256()
-    for rel_path in sorted(bundle.files):
+    # Bundle paths arrive from APIs and local sources; canonicalize them so
+    # the in-memory digest matches the on-disk digest on every platform.
+    canonical_files = {
+        Path(rel_path).as_posix(): content
+        for rel_path, content in bundle.files.items()
+    }
+    for rel_path in sorted(canonical_files):
         # Include the path so swapping file contents between two paths
         # changes the hash (avoids filename-swap evading update detection).
         h.update(rel_path.encode("utf-8"))
         h.update(b"\x00")
-        content = bundle.files[rel_path]
+        content = canonical_files[rel_path]
         if isinstance(content, bytes):
-            h.update(content)
+            h.update(canonical_skill_bytes(rel_path, content))
         else:
-            h.update(content.encode("utf-8"))
+            h.update(canonical_skill_bytes(rel_path, content.encode("utf-8")))
     return f"sha256:{h.hexdigest()[:16]}"
 
 
