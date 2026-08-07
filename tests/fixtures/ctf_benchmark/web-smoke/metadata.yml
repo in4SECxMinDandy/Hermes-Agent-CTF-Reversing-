@@ -1,0 +1,6 @@
+version: beta1
+name: Web smoke
+category: Web Exploitation
+description: Deterministic benchmark fixture for HTTP request triage.
+benchmark:
+  verifier: workspace/verify.py

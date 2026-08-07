@@ -41,6 +41,9 @@ Core idea: run like a coordinator. Put each challenge in a reproducible workspac
 isolated environment, delegate parallel solver angles when useful, share findings through files, and
 submit only verified candidate flags.
 
+The category playbooks explicitly cover the five competition domains: Web Exploitation, Cryptography,
+Reverse Engineering, Digital Forensics, and Binary Exploitation.
+
 ## When to Use
 
 Use this skill for:
@@ -66,6 +69,10 @@ The transferred behavior comes from these `ctf-agent` concepts:
 
 Load `references/ctf-agent-transfer.md` when you need a detailed mapping from the source project to
 Hermes behavior.
+
+The Android-specific runtime is provided by sandbox/apk-triage.py and the APK playbook. It records
+missing tools and failed stages in the report so a solver can choose a fallback instead of assuming
+that a successful command was available.
 
 ## Workspace Contract
 
@@ -124,6 +131,59 @@ files, decoded artifacts, exploit drafts, and solver notes. `findings.md` is the
    require a different approach. Completion: either a confirmed flag is found, or the final note lists
    all explored surfaces and why the challenge remains unsolved.
 
+## Automated Practical Readiness
+
+Use the normalized workspace as the durable boundary between discovery, analysis, and verification.
+Run category triage before delegating deeper analysis; it stores command output under
+`workspace/triage/` and appends a pointer to `findings.md`:
+
+```bash
+hermes ctf triage ~/ctf-challenges/<challenge-slug> --engine auto --network none --json
+```
+
+The triage engine uses Docker automatically when available and keeps `distfiles/` read-only. Network
+access is disabled by default; use `--network host` only for an explicitly authorized challenge
+service.
+
+Measure operational readiness with a representative local corpus. Each case must provide all five
+workspace artefacts and a trusted `workspace/verify.py`; `--execute` runs each verifier repeatedly and
+checks success, stable output, category coverage, and evidence completeness:
+
+```bash
+hermes ctf benchmark --root ~/ctf-benchmark --repeats 2 --execute \
+  --report ~/ctf-benchmark-report.json --json
+```
+
+The practical score is out of 10: category coverage (3), verifier success (3), reproducibility (2),
+and evidence completeness (2). This is a workflow-readiness signal, not a claim that every arbitrary
+challenge can be solved automatically. Keep real challenge corpora private and never place flags or
+tokens in source-controlled fixtures.
+
+## APK Reversing Mode
+
+For an APK challenge, keep the original package under distfiles/ and write all decoded, patched, and
+runtime artifacts under workspace/apk/. Run the deterministic wrapper first:
+
+    apk-triage --apk /challenge/distfiles/app.apk --out /challenge/workspace/apk
+
+Read workspace/apk/apk-report.json before opening large decompiler outputs. The report records
+package metadata, DEX count, native library ABIs, signer verification, packer detection, and the
+status/output of every optional tool. Use references/apk-reversing-playbook.md for the next branch:
+
+- Static: apkid, aapt/aapt2, apksigner, jadx, apktool, and Androguard.
+- Native: extract lib/*/*.so, identify each ABI, then use readelf, r2, objdump, or angr.
+- Runtime readiness: run `apk-runtime-check --out /challenge/workspace/apk/runtime --package
+  com.example.app` and read runtime-report.json before making dynamic claims.
+- Dynamic: use an external ADB-connected emulator/device, then Frida, Objection, or uiautomator2.
+  Do not execute APK code in the static sandbox.
+- Native-only: use a separate unidbg Java sidecar for ARM/JNI emulation when a full Android runtime
+  is unavailable; preserve ABI/API-level and argument evidence.
+- Network: use apk-mitm or android-unpinner for common pinning, and Frida runtime hooks when pinning
+  is implemented in native code or static patching fails.
+
+Dynamic execution is optional and must be explicitly available. A missing emulator is a blocked
+runtime branch, not evidence that the APK is benign or fully understood.
+
 ## Delegation Pattern
 
 Use one parent coordinator and focused workers. A good batch is 3 to 5 workers:
@@ -154,19 +214,47 @@ and exploit claims before telling the user.
 
 ## CTFd Mode
 
-If the user gives a CTFd URL and token, prefer the existing `ctf-agent` runner when available:
+Configure behavioral settings in `~/.hermes/config.yaml` and keep the API token in
+`~/.hermes/.env`:
+
+```yaml
+ctf:
+  url: https://ctfd.example.invalid
+  workspace: ~/ctf-challenges
+  agent_dir: ~/src/ctf-agent
+  sandbox_image: ctf-sandbox
+  max_challenges: 10
+```
+
+```text
+CTFD_TOKEN=secret-api-token
+```
+
+The CLI checks authorization and local prerequisites before contacting CTFd:
 
 ```bash
-cd /path/to/ctf-agent
-uv sync
-docker build -f sandbox/Dockerfile.sandbox -t ctf-sandbox .
-uv run ctf-solve --ctfd-url "$CTFD_URL" --ctfd-token "$CTFD_TOKEN" --challenges-dir challenges -v
+hermes ctf doctor --network
+hermes ctf assess --network --json
+hermes ctf pull --unsolved-only
+hermes ctf score --top 20
+hermes ctf status --top 20 --json
+```
+
+For full live automation, `hermes ctf run` delegates to the existing `ctf-agent`
+coordinator when that checkout is available. The coordinator polls CTFd, pulls new
+challenges, starts parallel swarms in the Docker sandbox, verifies submissions, and
+stops work after a solve. It defaults to dry-run submission; add `--submit` only when
+the operator explicitly wants live scoring:
+
+```bash
+hermes ctf run --challenges-dir ~/ctf-challenges
+hermes ctf run --challenges-dir ~/ctf-challenges --submit --coordinator claude
 ```
 
 For a single challenge:
 
 ```bash
-uv run ctf-solve --challenge challenges/<challenge-slug> --no-submit -v
+hermes ctf run --challenge ~/ctf-challenges/<challenge-slug>
 ```
 
 If using native Hermes instead, download challenge details and files into the workspace, then follow
@@ -174,6 +262,58 @@ the Operating Loop. Keep tokens out of chat history; put credentials in environm
 operator's existing secret store.
 
 Load `references/ctfd-workflow.md` for CTFd API and submission discipline.
+
+## Attack & Defense Mode
+
+Use `templates/attack-defense.yml` as the starting contract. It requires `authorized: true`,
+a non-empty target scope, named services, health checks, and explicit patch/attack/flag
+commands. Validation is always available without execution:
+
+```bash
+hermes ctf ad doctor templates/attack-defense.yml
+hermes ctf ad run templates/attack-defense.yml
+```
+
+Live commands are executed only after the operator opts in with `--live`; state and extracted
+flags are persisted to the configured scoreboard JSON:
+
+```bash
+hermes ctf ad run templates/attack-defense.yml --live --watch --interval 30
+hermes ctf ad status templates/attack-defense.yml
+```
+
+### Curated Attack Tools
+
+Hermes also provides a small, shell-free subset of the larger hackingtool catalog for common
+authorized recon and web-testing steps. Discover the current catalog with:
+
+```bash
+hermes ctf attack list
+```
+
+Attach tools to a service with `attack_tools`. The service `target` is injected by Hermes, so do not
+put a second URL or host in tool arguments:
+
+```yaml
+services:
+  - name: example-service
+    target: 127.0.0.1:31337
+    healthcheck: [python, -c, "print('healthy')"]
+    attack_tools:
+      - id: nmap
+        args: ["-T3"]
+        backend: auto
+        timeout: 90
+```
+
+The curated set covers network and subdomain recon, HTTP probing, crawling, web discovery, TLS and
+WAF fingerprinting, vulnerability discovery, and SQL injection testing. DDoS, phishing, wireless,
+credential-capture, RAT/C2, payload-generation, and post-exploitation tools are intentionally not
+included. `sqlmap` additionally requires `allow_high_risk: true` in the authorized config.
+
+`backend: auto` prefers a locally installed executable, then WSL, then Docker. Hermes never runs
+the upstream install commands automatically, never adds `--privileged`, and executes tool arguments
+as an argv list rather than through a shell.
 
 ## Common Pitfalls
 

@@ -4,6 +4,15 @@ Use these as starting points. Record commands and observations in `findings.md`.
 
 ## Universal Triage
 
+For a normalized Hermes workspace, persist the fixed probes before selecting a deeper hypothesis:
+
+```bash
+hermes ctf triage ./challenge --engine auto --network none --json
+```
+
+Review `workspace/triage/*.json` and `findings.md`; a missing tool is evidence about the environment,
+not evidence that the challenge path is exhausted.
+
 ```bash
 pwd
 find distfiles -maxdepth 2 -type f -print
@@ -31,7 +40,7 @@ routes. For forms, compare valid and invalid inputs. For auth, test default cred
 context implies it. For SSRF/XSS callbacks, use an operator-controlled webhook or the platform's
 intended callback sink; avoid real cloud metadata unless the challenge explicitly asks for it.
 
-## TCP Services and Pwn
+## Binary Exploitation (Pwn) and TCP Services
 
 Capture protocol behavior first:
 
@@ -115,7 +124,7 @@ RsaCtfTool --publickey pub.pem --uncipherfile flag.enc
 sage script.sage
 ```
 
-## Forensics and Stego
+## Digital Forensics and Steganography
 
 Never rely on one tool. Inspect metadata, magic bytes, appended data, archives, and visual content.
 

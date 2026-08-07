@@ -468,6 +468,8 @@ from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
 from hermes_cli.subcommands.mcp import build_mcp_parser
 from hermes_cli.subcommands.claw import build_claw_parser
+from hermes_cli.ctf import cmd_ctf
+from hermes_cli.subcommands.ctf import build_ctf_parser
 
 
 def _require_tty(command_name: str) -> None:
@@ -15277,6 +15279,11 @@ def main():
     # cron command  (parser built in hermes_cli/subcommands/cron.py)
     # =========================================================================
     build_cron_parser(subparsers, cmd_cron=cmd_cron)
+
+    # =========================================================================
+    # ctf command (CLI-edge CTFd / solver / Attack & Defense orchestration)
+    # =========================================================================
+    build_ctf_parser(subparsers, cmd_ctf=cmd_ctf)
 
     # =========================================================================
     # webhook command  (parser built in hermes_cli/subcommands/webhook.py)

@@ -1,0 +1,4 @@
+name: binary-smoke
+category: Binary Exploitation
+benchmark:
+  verifier: workspace/verify.py

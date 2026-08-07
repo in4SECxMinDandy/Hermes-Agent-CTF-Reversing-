@@ -4,17 +4,18 @@ Use this when a challenge comes from CTFd.
 
 ## Credentials
 
-Prefer `CTFD_URL` and `CTFD_TOKEN` environment variables. If only username/password is available,
-store them in the operator's secret mechanism and avoid writing them into chat history.
+Put the CTFd URL in `ctf.url` in `~/.hermes/config.yaml` and the API token in `CTFD_TOKEN` inside
+`~/.hermes/.env`. If only username/password is available, store them in the operator's secret
+mechanism and avoid writing them into chat history.
 
 Never commit `.env`, challenge tokens, session cookies, or downloaded private challenge data.
 
 ## Pulling Challenges
 
-If the `ctf-agent` checkout is available, use its puller:
+Use the Hermes wrapper so the workspace contract and path-safety checks are applied:
 
 ```bash
-python pull_challenges.py --url "$CTFD_URL" --token "$CTFD_TOKEN" --output challenges
+hermes ctf pull --unsolved-only
 ```
 
 Expected layout:
@@ -58,8 +59,11 @@ For live competitions:
 5. Send operator hints into `findings.md` or the active coordinator prompt.
 6. Keep a final scoreboard: solved, unsolved, active workers, cost/time if known.
 
-Hermes implementation options:
+Hermes implementation:
 
-- Use `ctf-agent` coordinator as the automation engine and Hermes as monitor/operator.
-- Use `cronjob` for periodic poll-and-report when full live automation is not needed.
-- Use a long-running terminal process for a local coordinator loop.
+- `hermes ctf run` uses the `ctf-agent` coordinator as the automation engine and Hermes as
+  monitor/operator. Its coordinator polls every five seconds, pulls new challenges, and runs
+  parallel swarms.
+- `hermes ctf score` provides a direct scoreboard snapshot for scripts and operators.
+- `hermes ctf status` combines visible, solved, unsolved, and scoreboard state in one snapshot.
+- `hermes ctf ad run` provides the authorized Attack & Defense health/patch/attack/flag loop.

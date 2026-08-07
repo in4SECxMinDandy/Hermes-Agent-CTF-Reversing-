@@ -75,6 +75,12 @@ ignored/
 .worktrees/
 environments/benchmarks/evals/
 
+# CTF workspaces and local score state may contain private challenge files,
+# flags, tokens, and competition metadata. Keep them out of source control.
+/challenges/
+**/challenges/
+*.scoreboard.json
+
 # Web UI build output
 hermes_cli/web_dist/
 # Cross-process web UI build lock (flock target, always empty)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM4Decompile"
+  short_description: "AI-assisted Ghidra decompilation workflows"
+  default_prompt: "Use $llm4decompile to decompile this authorized Linux x86_64 binary and verify the recovered C logic."

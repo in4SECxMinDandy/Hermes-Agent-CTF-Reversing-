@@ -1,0 +1,4 @@
+name: forensics-smoke
+category: Digital Forensics
+benchmark:
+  verifier: workspace/verify.py

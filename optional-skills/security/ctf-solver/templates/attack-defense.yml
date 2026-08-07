@@ -1,0 +1,23 @@
+# Copy this file and replace every target and command with the authorized lab values.
+authorized: true
+scope:
+  - 127.0.0.1:31337
+flag_pattern: '(?:[A-Za-z0-9_.-]+\{[^\r\n{}]+\}|FLAG\[[^\r\n\]]+\])'
+command_timeout: 60
+# Set this only for an explicitly approved lab where injection testing is in scope.
+allow_high_risk: false
+services:
+  - name: example-service
+    target: 127.0.0.1:31337
+    healthcheck: [python, -c, "print('replace with a real health check')"]
+    patch: [python, -c, "print('replace with an authorized patch command')"]
+    # Optional curated tools. Hermes injects the service target and executes
+    # the resulting argv without a shell. Omit this block for command-only A&D.
+    # attack_tools:
+    #   - id: nmap
+    #     args: ["-T3"]
+    #     backend: auto
+    #     timeout: 90
+    attack: [python, -c, "print('replace with an authorized attack command')"]
+    flag_command: [python, -c, "print('replace with an authorized flag retrieval command')"]
+    points: 100

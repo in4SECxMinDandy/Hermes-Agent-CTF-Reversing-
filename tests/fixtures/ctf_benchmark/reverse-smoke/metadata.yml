@@ -1,0 +1,6 @@
+version: beta1
+name: Reverse smoke
+category: Reverse Engineering
+description: Deterministic benchmark fixture for byte-level decoding.
+benchmark:
+  verifier: workspace/verify.py

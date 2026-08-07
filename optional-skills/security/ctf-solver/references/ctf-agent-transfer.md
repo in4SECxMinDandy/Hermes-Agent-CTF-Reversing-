@@ -6,9 +6,9 @@ This reference maps the behavior of `ctf-agent` into Hermes-native practice.
 
 | ctf-agent component | Purpose | Hermes transfer |
 |---|---|---|
-| `backend/cli.py` | CLI entrypoint, single challenge or coordinator mode | Use `terminal` to run `ctf-agent` directly, or use this skill's native loop |
-| `backend/ctfd.py` | CTFd auth, challenge pull, solved names, flag submission | Use CTFd API or `ctf-agent` runner; keep credentials in env |
-| `backend/poller.py` | Poll every 5 seconds for new/solved challenges | Use `cronjob` or a long-running terminal process for live competitions |
+| `backend/cli.py` | CLI entrypoint, single challenge or coordinator mode | Use `hermes ctf run` to launch the configured checkout |
+| `backend/ctfd.py` | CTFd auth, challenge pull, solved names, flag submission | Use `hermes ctf pull`, `score`, and `submit`, or the wrapped runner |
+| `backend/poller.py` | Poll every 5 seconds for new/solved challenges | `hermes ctf run` delegates to this coordinator loop |
 | `backend/agents/coordinator_loop.py` | Event loop that spawns swarms and handles operator messages | Parent Hermes session acts as coordinator |
 | `backend/agents/swarm.py` | Multiple solvers race one challenge | Use `delegate_task` workers, or spawn separate Hermes/ctf-agent processes |
 | `backend/prompts.py` | Builds challenge prompt from metadata and distfiles | Use the same brief fields in `metadata.yml` and worker context |
@@ -41,17 +41,16 @@ This reference maps the behavior of `ctf-agent` into Hermes-native practice.
 5. Parent verifies the strongest candidate and submits.
 6. If no solve, bump workers with a distilled "do not repeat" section.
 
-## Running the Original ctf-agent from Hermes
+## Running ctf-agent through Hermes
 
-Use this when the user wants full automation against CTFd and the checkout is available:
+Use the Hermes CLI when the user wants full automation against CTFd and the checkout is available:
 
 ```bash
-cd C:/Users/haqua/Documents/GitHub/ctf-agent
-uv sync
-docker build -f sandbox/Dockerfile.sandbox -t ctf-sandbox .
-uv run ctf-solve --ctfd-url "$CTFD_URL" --ctfd-token "$CTFD_TOKEN" --challenges-dir challenges --max-challenges 10 -v
+hermes ctf doctor --network
+hermes ctf run --challenges-dir ~/ctf-challenges
 ```
 
-Use `--no-submit` for dry-run analysis. Use `--challenge challenges/<slug>` to solve a single local
-challenge. While it runs, Hermes can monitor logs, send operator messages with `ctf-msg`, or inspect
-the challenge directory.
+The wrapper uses `--no-submit` by default for dry-run analysis. Add `--submit` only for explicit
+live scoring. Use `hermes ctf run --challenge <workspace>/<slug>` for one local challenge. While it
+runs, Hermes can monitor logs, send operator messages with `ctf-msg`, or inspect the challenge
+directory.

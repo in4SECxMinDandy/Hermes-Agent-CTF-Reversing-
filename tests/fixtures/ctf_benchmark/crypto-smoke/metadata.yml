@@ -1,0 +1,6 @@
+version: beta1
+name: Crypto smoke
+category: Cryptography
+description: Deterministic benchmark fixture for modular arithmetic validation.
+benchmark:
+  verifier: workspace/verify.py

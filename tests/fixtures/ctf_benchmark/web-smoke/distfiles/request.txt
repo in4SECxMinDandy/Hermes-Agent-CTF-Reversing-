@@ -1,0 +1,3 @@
+GET /search?q=hermes HTTP/1.1
+Host: ctf.local
+X-CTF-Workflow: web
