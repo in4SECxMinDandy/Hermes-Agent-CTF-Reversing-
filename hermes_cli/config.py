@@ -2727,6 +2727,14 @@ DEFAULT_CONFIG = {
         "allowed_rooms": "",           # If set, bot ONLY responds in these room IDs (whitelist)
     },
 
+    # Authorized CTF workflow settings. CTFd credentials belong in .env;
+    # this controls only the operator's submission policy.
+    "ctf": {
+        # Submit verified flags without requiring --yes. Explicit opt-in;
+        # false keeps the command-line confirmation requirement.
+        "auto_submit": False,
+    },
+
     # Approval mode for dangerous commands:
     #   manual — always prompt the user
     #   smart  — use auxiliary LLM to auto-approve low-risk commands (default)

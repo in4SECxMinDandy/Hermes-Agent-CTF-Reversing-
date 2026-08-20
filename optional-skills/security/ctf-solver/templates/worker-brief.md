@@ -18,9 +18,16 @@ Current findings:
 PASTE_FINDINGS_HERE
 ```
 
+CTF case brief:
+
+```text
+PASTE_CASEBOOK_BRIEF_HERE
+```
+
 Task:
 
-Work one independent angle. Do not repeat dead ends. Return structured output:
+Work one independent angle. Do not repeat casebook dead ends. Return structured output. The parent
+records verified evidence, dead ends, next steps, and artifact paths in the casebook:
 
 ```json
 {

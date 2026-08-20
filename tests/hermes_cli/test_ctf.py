@@ -18,13 +18,17 @@ from hermes_cli.ctf import (
     CTFError,
     CTFSettings,
     CTFdClient,
+    build_ctf_agent_command,
+    cmd_ctf,
     doctor,
+    ensure_challenge_workspace,
     live_status,
     load_ad_config,
     pull_challenges,
     run_attack_defense_once,
 )
 from hermes_cli.ctf_benchmark import run_benchmark
+from hermes_cli.ctf_casebook import CasebookError, casebook_status, record_casebook, render_casebook_brief
 from hermes_cli.ctf_triage import run_triage
 
 
@@ -201,6 +205,56 @@ def test_pull_submit_score_and_origin_guard(fake_ctfd: str, tmp_path: Path) -> N
     assert "Token secret" in _FakeCTFdHandler.seen_auth
 
 
+def test_ctf_auto_submit_is_explicit_and_applies_to_direct_and_solver_submissions(
+    fake_ctfd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = CTFSettings(
+        url=fake_ctfd,
+        token="secret",
+        workspace=tmp_path / "challenges",
+        agent_dir=tmp_path,
+        auto_submit=True,
+    )
+    monkeypatch.setattr("hermes_cli.ctf.load_ctf_settings", lambda: settings)
+    monkeypatch.setattr("hermes_cli.ctf.shutil.which", lambda name: sys.executable if name == "uv" else None)
+
+    result = cmd_ctf(
+        argparse.Namespace(
+            ctf_action="submit",
+            challenge="Demo Web",
+            flag="FLAG{ok}",
+            yes=False,
+            json=False,
+        )
+    )
+    command, _env, _cwd = build_ctf_agent_command(settings)
+
+    assert result == 0
+    assert _FakeCTFdHandler.submissions == [{"challenge_id": 1, "submission": "FLAG{ok}"}]
+    assert "--no-submit" not in command
+
+
+def test_ctf_submit_still_requires_confirmation_without_auto_submit(
+    fake_ctfd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = CTFSettings(url=fake_ctfd, token="secret", workspace=tmp_path / "challenges")
+    monkeypatch.setattr("hermes_cli.ctf.load_ctf_settings", lambda: settings)
+
+    result = cmd_ctf(
+        argparse.Namespace(
+            ctf_action="submit",
+            challenge="Demo Web",
+            flag="FLAG{ok}",
+            yes=False,
+            json=False,
+        )
+    )
+
+    assert result == 2
+    assert "ctf.auto_submit" in capsys.readouterr().err
+    assert _FakeCTFdHandler.submissions == []
+
+
 def test_attack_defense_requires_scope_and_persists_score(tmp_path: Path) -> None:
     config_path = tmp_path / "ad.yml"
     config_path.write_text(
@@ -374,7 +428,61 @@ def test_triage_persists_evidence_in_workspace(tmp_path: Path, monkeypatch: pyte
     assert report_path.is_file()
     assert json.loads(report_path.read_text(encoding="utf-8"))["result"]["returncode"] == 0
     assert "Automated web triage" in (challenge_dir / "findings.md").read_text(encoding="utf-8")
+    casebook = json.loads((challenge_dir / "workspace" / "casebook.json").read_text(encoding="utf-8"))
+    assert casebook["artifacts"][0]["text"] == report_path.relative_to(challenge_dir).as_posix()
+    assert "Review the triage report" in casebook["next_steps"][0]["text"]
     assert captured["cwd"] == challenge_dir
+
+
+def test_casebook_keeps_resumable_ctf_state_bounded_to_the_workspace(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "demo"
+    ensure_challenge_workspace(
+        challenge_dir,
+        {"name": "Demo", "category": "Reverse", "connection_info": "nc 127.0.0.1 31337"},
+    )
+    artifact = challenge_dir / "workspace" / "decode.py"
+    artifact.write_text("print('fixture')\n", encoding="utf-8")
+
+    record_casebook(challenge_dir, hypothesis="The check is an XOR transform", confidence=70)
+    record_casebook(challenge_dir, evidence="The binary imports strlen and memcmp")
+    record_casebook(challenge_dir, dead_end="Plain ROT13 produced no printable flag")
+    record_casebook(challenge_dir, next_step="Trace the comparison loop in the disassembler")
+    record_casebook(challenge_dir, artifact=artifact, artifact_summary="Decoder experiment")
+
+    status = casebook_status(challenge_dir)
+    brief = render_casebook_brief(challenge_dir)
+
+    assert status["counts"] == {
+        "hypotheses": 1,
+        "evidence": 1,
+        "dead_ends": 1,
+        "next_steps": 1,
+        "artifacts": 1,
+    }
+    assert "confidence: 70%" in brief
+    assert "Plain ROT13" in brief
+    assert "`workspace/decode.py` - Decoder experiment" in brief
+    with pytest.raises(CasebookError, match="inside the challenge workspace"):
+        record_casebook(challenge_dir, artifact=tmp_path / "outside.txt")
+
+
+def test_casebook_cli_records_and_renders_brief(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from hermes_cli.subcommands.ctf import build_ctf_parser
+
+    challenge_dir = tmp_path / "cli-case"
+    ensure_challenge_workspace(challenge_dir, {"name": "CLI Case", "category": "Crypto"})
+    parser = argparse.ArgumentParser()
+    build_ctf_parser(parser.add_subparsers(dest="command"), cmd_ctf=cmd_ctf)
+
+    record_args = parser.parse_args(
+        ["ctf", "case", "record", str(challenge_dir), "--hypothesis", "RSA modulus is shared", "--confidence", "65"]
+    )
+    assert cmd_ctf(record_args) == 0
+    capsys.readouterr()
+
+    brief_args = parser.parse_args(["ctf", "case", "brief", str(challenge_dir)])
+    assert cmd_ctf(brief_args) == 0
+    assert "RSA modulus is shared (confidence: 65%)" in capsys.readouterr().out
 
 
 def test_ctf_parser_wires_nested_actions() -> None:
@@ -408,3 +516,11 @@ def test_ctf_parser_wires_nested_actions() -> None:
     assert attack_args.ctf_action == "attack"
     assert attack_args.attack_action == "list"
     assert attack_args.json is True
+
+    case_args = parser.parse_args(
+        ["ctf", "case", "record", "challenge", "--hypothesis", "XOR transform", "--confidence", "70"]
+    )
+    assert case_args.ctf_action == "case"
+    assert case_args.case_action == "record"
+    assert case_args.hypothesis == "XOR transform"
+    assert case_args.confidence == 70

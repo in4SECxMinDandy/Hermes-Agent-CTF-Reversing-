@@ -23,11 +23,14 @@ Hermes Agent CTF Reversing là bản mở rộng của [Hermes Agent](https://gi
 - **Agent đa kênh:** dùng cùng một agent qua CLI, TUI, desktop và các kênh nhắn tin mà Hermes hỗ trợ.
 - **Skill `ctf-solver`:** playbook cho web, crypto, reverse engineering, pwn/binary, forensics, stego và APK reversing.
 - **Workspace có cấu trúc:** tách input gốc, tệp sinh ra, ghi chú chung và trace để kết quả có thể kiểm tra lại.
+- **Evidence append-only:** `workspace/casebook.events.jsonl` là log bằng chứng/approval; `casebook.json` chỉ là projection gọn cho session mới.
 - **Triage cố định:** `hermes ctf triage` chạy probe theo danh mục, lưu report JSON và cập nhật `findings.md`.
-- **Benchmark cục bộ:** đo độ phủ danh mục, verifier, tính lặp lại và độ đầy đủ của bằng chứng; không đồng nhất điểm này với tỷ lệ giải được CTF bất kỳ.
+- **Benchmark cục bộ:** chạy verifier lặp, chuẩn hóa `succeeded`/`command_failed`/`timed_out`/`runner_failed`, đo độ phủ và độ đầy đủ của bằng chứng; không đồng nhất điểm này với tỷ lệ giải được CTF bất kỳ.
 - **CTFd:** pull challenge, xem score/status và submit flag qua API, với token tách khỏi cấu hình.
 - **Điều phối song song:** Hermes có thể giao các hướng điều tra độc lập cho subagent, nhưng coordinator vẫn là nơi xác minh bằng chứng và submit flag.
 - **Attack & Defense có kiểm soát:** bắt buộc khai báo `authorized: true`, scope cụ thể và `--live` trước khi chạy lệnh có tác động.
+- **Approval một lần:** host networking, live attack và submit đều ghi audit decision và chỉ được consume trong invocation hiện tại.
+- **CTF workers trên Kanban:** `hermes ctf swarm` tạo worker song song, verifier và synthesizer bằng dependency graph Kanban hiện có.
 
 ## Kiến trúc CTF
 
@@ -41,7 +44,7 @@ Hermes Agent
   |     +-- mẫu metadata và worker brief
   |
   +-- hermes ctf
-        +-- init / triage / benchmark
+        +-- init / triage / benchmark / swarm
         +-- doctor / assess
         +-- pull / score / status / submit (CTFd)
         +-- run (ctf-agent coordinator tùy chọn)
@@ -53,7 +56,10 @@ Hermes Agent
 | CTF CLI | `hermes_cli/ctf.py` | CTFd, workspace, runner và Attack & Defense |
 | Parser CLI | `hermes_cli/subcommands/ctf.py` | Định nghĩa `hermes ctf ...` |
 | Triage | `hermes_cli/ctf_triage.py` | Probe theo danh mục và report evidence |
+| Casebook | `hermes_cli/ctf_casebook.py` | Append-only evidence log và projection cho hypothesis, evidence, dead end, artifact |
+| Approval | `hermes_cli/ctf_approval.py` | One-shot approval/audit cho live attack, host network và submit |
 | Benchmark | `hermes_cli/ctf_benchmark.py` | Verifier và metric tái lập |
+| Kanban workers | `hermes_cli/ctf_kanban.py` | CTF worker graph trên Kanban Swarm hiện có |
 | Skill | `optional-skills/security/ctf-solver/` | Quy trình, playbook, template và toolbox |
 | Tests | `tests/hermes_cli/test_ctf.py` | CTFd fixture, triage, benchmark và A&D |
 | Ví dụ reverse | `ctf_cases/MetroApp/` | Case có artifact, trace, findings và verifier |
@@ -67,6 +73,8 @@ Mỗi challenge nên được chuẩn hóa theo cấu trúc sau:
   metadata.yml     # Tên, danh mục, hint, kết nối, flag format
   distfiles/       # Input gốc, chỉ đọc
   workspace/       # Script, file extract, patch và artifact sinh ra
+    casebook.json  # State resumable: hypothesis, evidence, dead end, artifact
+    casebook.events.jsonl  # Nguồn sự thật append-only cho evidence và audit
   findings.md      # Bảng thông tin chung của coordinator và worker
   traces/          # Output, trace, disassembly, bằng chứng đã chọn lọc
 ```
@@ -145,7 +153,10 @@ uv run hermes ctf init ~/Downloads/challenge.zip --root ~/ctf-challenges
 # 3. Chạy fixed probes. Docker được chọn tự động nếu có sẵn.
 uv run hermes ctf triage ~/ctf-challenges/challenge --engine auto --network none --json
 
-# 4. Đọc findings.md và report trong workspace/triage/, sau đó điều tra bằng agent.
+# 4. Tạo brief ngắn cho agent/subagent, thay vì nhồi lại toàn bộ output tool.
+uv run hermes ctf case brief ~/ctf-challenges/challenge
+
+# 5. Đọc findings.md và report trong workspace/triage/, sau đó điều tra bằng agent.
 uv run hermes
 ```
 
@@ -159,7 +170,18 @@ Ví dụ prompt:
 thực hiện một giả thuyết reverse engineering có bằng chứng. Không sửa distfiles/.
 ```
 
-Khi triage bằng Docker, `--network none` là mặc định an toàn. Chỉ dùng `--network host` khi dịch vụ CTF đã được ủy quyền cần truy cập từ sandbox. Chế độ `--engine local` chạy probe trên host và không tạo network isolation; chỉ dùng nó với input local/offline hoặc khi bạn đã kiểm soát môi trường thực thi.
+Khi triage bằng Docker, `--network none` là mặc định an toàn. Chỉ dùng `--network host` khi dịch vụ CTF đã được ủy quyền cần truy cập từ sandbox và xác nhận một lần bằng `--yes`. Chế độ `--engine local` chạy probe trên host và không tạo network isolation; chỉ dùng nó với input local/offline hoặc khi bạn đã kiểm soát môi trường thực thi.
+
+### Kanban worker workflow
+
+Tạo nhiều hướng điều tra trên board hiện tại; verifier chỉ sẵn sàng sau khi mọi worker hoàn tất, synthesizer chờ verifier pass:
+
+```bash
+uv run hermes ctf swarm ~/ctf-challenges/challenge \
+  --worker reverse-worker:"Recover the check" \
+  --worker protocol-worker:"Map service behavior" \
+  --verifier ctf-verifier --synthesizer ctf-synthesizer --json
+```
 
 ### Benchmark workflow
 
@@ -270,6 +292,8 @@ Coordinator cập nhật `findings.md`, loại bỏ kết quả trùng lặp và
 | `hermes ctf assess [--network] [--json]` | Chấm điểm readiness 0-10 |
 | `hermes ctf init <source> --root <dir>` | Chuẩn hóa file/thư mục local thành workspace |
 | `hermes ctf triage <challenge> [--engine auto|docker|local]` | Chạy probe theo danh mục và lưu report |
+| `hermes ctf case brief <challenge>` | Tạo brief cô đọng cho agent/subagent từ evidence đã ghi |
+| `hermes ctf case record <challenge> --evidence <text>` | Ghi hypothesis, evidence, dead end, next step hoặc artifact |
 | `hermes ctf benchmark --root <dir> [--execute]` | Đo corpus verifier local |
 | `hermes ctf pull [--unsolved-only]` | Tải challenge và file từ CTFd |
 | `hermes ctf score [--top N]` | Xem scoreboard CTFd |

@@ -272,6 +272,8 @@ def parse_worker_arg(raw: str) -> SwarmWorkerSpec:
     parts = [p.strip() for p in raw.split(":", 2)]
     if len(parts) < 2:
         raise ValueError("worker must be profile:title or profile:title:skill,skill")
+    if not parts[0] or not parts[1]:
+        raise ValueError("worker profile and title must not be empty")
     skills: list[str] = []
     if len(parts) == 3 and parts[2]:
         skills = [s.strip() for s in parts[2].split(",") if s.strip()]

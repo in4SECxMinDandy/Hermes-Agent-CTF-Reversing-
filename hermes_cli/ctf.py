@@ -51,6 +51,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _authorize_ctf_side_effect(
+    action: str,
+    *,
+    approved: bool,
+    challenge_dir: Path | None = None,
+    audit_path: Path | None = None,
+    details: Mapping[str, Any] | None = None,
+    source: str = "cli",
+) -> None:
+    """Keep approval enforcement at the CLI edge immediately before effects."""
+    from hermes_cli.ctf_approval import ApprovalError, authorize_once
+
+    try:
+        approval = authorize_once(
+            action,
+            approved=approved,
+            challenge_dir=challenge_dir,
+            audit_path=audit_path,
+            details=details,
+            source=source,
+        )
+        approval.consume()
+    except ApprovalError as exc:
+        raise CTFError(str(exc)) from exc
+
+
 def _json_dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False)
 
@@ -139,6 +165,19 @@ def _config_section(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return dict(section) if isinstance(section, Mapping) else {}
 
 
+def _config_bool(value: Any, *, default: bool = False) -> bool:
+    """Return a strict boolean for user-configured CTF behavior."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "off", "0", ""}:
+            return False
+    return default
+
+
 def _find_ctf_agent(configured: str | None = None) -> Path | None:
     candidates: list[Path] = []
     if configured:
@@ -178,6 +217,7 @@ class CTFSettings:
     max_challenges: int = 10
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
     verify_tls: bool = True
+    auto_submit: bool = False
 
 
 def load_ctf_settings(config: Mapping[str, Any] | None = None) -> CTFSettings:
@@ -208,6 +248,7 @@ def load_ctf_settings(config: Mapping[str, Any] | None = None) -> CTFSettings:
         max_challenges=max_challenges,
         request_timeout=request_timeout,
         verify_tls=bool(section.get("verify_tls", True)),
+        auto_submit=_config_bool(section.get("auto_submit"), default=False),
     )
 
 
@@ -475,6 +516,9 @@ def ensure_challenge_workspace(
             "- `distfiles/` is input material; generated work belongs in `workspace/`.\n",
             encoding="utf-8",
         )
+    from hermes_cli.ctf_casebook import initialize_casebook
+
+    initialize_casebook(challenge_dir, metadata)
     return challenge_dir
 
 
@@ -958,7 +1002,7 @@ def assessment(settings: CTFSettings, *, network: bool = False) -> dict[str, Any
         ("Parallel solver orchestration", checks["ctf_agent"]["ok"] and checks["solver_runtime"]["ok"], "external ctf-agent coordinator/swarm"),
         ("Evidence and loop discipline", checks["evidence_contract"]["ok"], "findings, traces, deduplication, bump"),
         ("CTFd discovery and pull", checks["ctfd_config"]["ok"], "API URL and token configured"),
-        ("Verified flag submission", ctfd_ready, "attempt endpoint with explicit submit"),
+        ("Verified flag submission", ctfd_ready, "attempt endpoint with explicit submit or ctf.auto_submit"),
         ("Scoreboard and live status", ctfd_ready and checks["ctf_agent"]["ok"], "scoreboard API and poll-capable runner"),
         ("Attack & Defense orchestration", checks["ad_runner"]["ok"], "authorized config, health, patch, attack, flag state"),
     ]
@@ -991,6 +1035,7 @@ def build_ctf_agent_command(
         env["CTFD_URL"] = settings.url
     if settings.token:
         env["CTFD_TOKEN"] = settings.token
+    effective_submit = submit or settings.auto_submit
     command = [uv, "run", "ctf-solve", "--image", settings.sandbox_image, "--coordinator", coordinator]
     if challenge:
         command.extend(["--challenge", str(Path(challenge).expanduser().resolve())])
@@ -999,7 +1044,7 @@ def build_ctf_agent_command(
         command.extend(["--max-challenges", str(settings.max_challenges)])
     for model in models:
         command.extend(["--models", model])
-    if not submit:
+    if not effective_submit:
         command.append("--no-submit")
     return command, env, settings.agent_dir
 
@@ -1013,13 +1058,14 @@ def run_ctf_agent(
     coordinator: str = "claude",
     models: Iterable[str] = (),
 ) -> int:
-    if submit:
+    effective_submit = submit or settings.auto_submit
+    if effective_submit:
         _require_ctfd(settings)
     command, env, cwd = build_ctf_agent_command(
         settings,
         challenge=challenge,
         challenges_dir=challenges_dir,
-        submit=submit,
+        submit=effective_submit,
         coordinator=coordinator,
         models=models,
     )
@@ -1059,6 +1105,13 @@ def _cmd_ctf(args: Any) -> int | None:
     if action == "triage":
         from hermes_cli.ctf_triage import run_triage
 
+        if args.network == "host":
+            _authorize_ctf_side_effect(
+                "ctf.triage.network_host",
+                approved=bool(getattr(args, "yes", False)),
+                challenge_dir=Path(args.challenge),
+                details={"network": "host", "engine": args.engine},
+            )
         result = run_triage(
             Path(args.challenge),
             image=args.image or settings.sandbox_image,
@@ -1067,7 +1120,7 @@ def _cmd_ctf(args: Any) -> int | None:
             timeout=args.timeout,
         )
         _print(result, as_json=args.json)
-        return 0 if result["result"]["returncode"] == 0 else 2
+        return 0 if result["result"].get("status") == "succeeded" else 2
     if action == "benchmark":
         from hermes_cli.ctf_benchmark import run_benchmark
 
@@ -1080,6 +1133,68 @@ def _cmd_ctf(args: Any) -> int | None:
         )
         _print(result, as_json=args.json)
         return 0 if not args.execute or result["metrics"]["practical_score"] == 10 else 2
+    if action == "case":
+        from hermes_cli.ctf_casebook import (
+            CasebookError,
+            casebook_status,
+            initialize_casebook,
+            record_casebook,
+            render_casebook_brief,
+        )
+
+        challenge_dir = Path(args.challenge)
+        try:
+            if args.case_action == "init":
+                result = initialize_casebook(challenge_dir)
+                _print(
+                    {
+                        "path": str(challenge_dir / "workspace" / "casebook.json"),
+                        "status": result["status"],
+                    },
+                    as_json=args.json,
+                )
+                return 0
+            if args.case_action == "status":
+                _print(casebook_status(challenge_dir), as_json=args.json)
+                return 0
+            if args.case_action == "brief":
+                brief = render_casebook_brief(challenge_dir, max_entries=args.max_entries)
+                _print({"brief": brief} if args.json else brief, as_json=args.json)
+                return 0
+            if args.case_action == "record":
+                record_casebook(
+                    challenge_dir,
+                    hypothesis=args.hypothesis,
+                    evidence=args.evidence,
+                    dead_end=args.dead_end,
+                    next_step=args.next_step,
+                    artifact=args.artifact,
+                    artifact_summary=args.artifact_summary,
+                    confidence=args.confidence,
+                    status=args.status,
+                )
+                _print(casebook_status(challenge_dir), as_json=args.json)
+                return 0
+        except CasebookError as exc:
+            raise CTFError(str(exc)) from exc
+        raise CTFError("Choose a case action; use `hermes ctf case --help`")
+    if action == "swarm":
+        from hermes_cli.ctf_kanban import create_ctf_worker_swarm
+        from hermes_cli.kanban_swarm import parse_worker_arg
+
+        try:
+            workers = [parse_worker_arg(value) for value in args.worker]
+        except ValueError as exc:
+            raise CTFError(str(exc)) from exc
+        result = create_ctf_worker_swarm(
+            Path(args.challenge),
+            workers=workers,
+            verifier_assignee=args.verifier,
+            synthesizer_assignee=args.synthesizer,
+            board=args.board,
+        )
+        _print(result, as_json=args.json)
+        return 0
     if action == "pull":
         result = pull_challenges(
             settings,
@@ -1102,8 +1217,18 @@ def _cmd_ctf(args: Any) -> int | None:
         _print(result, as_json=args.json)
         return 0
     if action == "submit":
-        if not args.yes:
-            raise CTFError("Flag submission is an external side effect; pass --yes explicitly")
+        try:
+            _authorize_ctf_side_effect(
+                "ctf.submit",
+                approved=bool(args.yes or settings.auto_submit),
+                audit_path=settings.workspace / ".ctf-approval-events.jsonl",
+                details={"challenge": args.challenge},
+                source="config" if settings.auto_submit and not args.yes else "cli",
+            )
+        except CTFError as exc:
+            if not args.yes and not settings.auto_submit:
+                raise CTFError(f"{exc}; or set ctf.auto_submit: true") from exc
+            raise
         _require_ctfd(settings)
         with CTFdClient(settings.url, settings.token, timeout=settings.request_timeout, verify_tls=settings.verify_tls) as client:
             result = client.submit_flag(args.challenge, args.flag)
@@ -1112,6 +1237,14 @@ def _cmd_ctf(args: Any) -> int | None:
     if action == "run":
         if args.challenge is None:
             _require_ctfd(settings)
+        if args.submit or settings.auto_submit:
+            _authorize_ctf_side_effect(
+                "ctf.solver.submit",
+                approved=True,
+                audit_path=settings.workspace / ".ctf-approval-events.jsonl",
+                details={"challenge": args.challenge or "workspace", "coordinator": args.coordinator},
+                source="config" if settings.auto_submit and not args.submit else "cli",
+            )
         return run_ctf_agent(
             settings,
             challenge=args.challenge,
@@ -1144,6 +1277,22 @@ def _cmd_ctf(args: Any) -> int | None:
                 result = run_attack_defense_once(config_path, state_path=Path(args.state) if args.state else None, live=False)
                 _print(result, as_json=args.json)
                 return 0
+            config = load_ad_config(config_path)
+            host_network = any(
+                str(request.get("network", "bridge")) == "host"
+                for service in config.get("services", [])
+                if isinstance(service, Mapping)
+                for request in service.get("attack_tools", [])
+                if isinstance(request, Mapping)
+            )
+            _authorize_ctf_side_effect(
+                "ctf.attack_defense.live",
+                approved=True,
+                audit_path=_ad_state_path(config_path, Path(args.state) if args.state else None).with_name(
+                    ".ctf-approval-events.jsonl"
+                ),
+                details={"config": str(config_path), "host_network": host_network},
+            )
             cycles = None if args.watch else max(1, args.cycles)
             result: dict[str, Any] = {}
             completed = 0

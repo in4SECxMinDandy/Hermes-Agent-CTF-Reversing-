@@ -63,6 +63,11 @@ def build_ctf_parser(subparsers, *, cmd_ctf: Callable) -> None:
         default="none",
         help="Sandbox network policy (default: none)",
     )
+    triage.add_argument(
+        "--yes",
+        action="store_true",
+        help="Approve this invocation when using host networking",
+    )
     triage.add_argument("--image", help="Override the CTF sandbox image")
     triage.add_argument("--timeout", type=float, default=90.0, help="Probe timeout in seconds")
     triage.add_argument("--json", action="store_true", help="Print machine-readable JSON")
@@ -81,6 +86,52 @@ def build_ctf_parser(subparsers, *, cmd_ctf: Callable) -> None:
     )
     benchmark.add_argument("--report", help="Optional JSON report path")
     benchmark.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    case = actions.add_parser("case", help="Persist compact evidence and a resumable CTF case brief")
+    case_actions = case.add_subparsers(dest="case_action")
+    case_init = case_actions.add_parser("init", help="Create the workspace-local casebook")
+    case_init.add_argument("challenge", help="Normalized challenge workspace directory")
+    case_init.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    case_status = case_actions.add_parser("status", help="Show casebook counts and status")
+    case_status.add_argument("challenge", help="Normalized challenge workspace directory")
+    case_status.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    case_brief = case_actions.add_parser("brief", help="Render a bounded brief for an agent or worker")
+    case_brief.add_argument("challenge", help="Normalized challenge workspace directory")
+    case_brief.add_argument("--max-entries", type=int, default=6, help="Entries per section (1-20)")
+    case_brief.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    case_record = case_actions.add_parser("record", help="Append evidence, a hypothesis, or a next step")
+    case_record.add_argument("challenge", help="Normalized challenge workspace directory")
+    record_value = case_record.add_mutually_exclusive_group(required=False)
+    record_value.add_argument("--hypothesis", help="Evidence-backed line of inquiry")
+    record_value.add_argument("--evidence", help="Observed fact or verified result")
+    record_value.add_argument("--dead-end", help="Approach that should not be repeated")
+    record_value.add_argument("--next-step", help="Concrete next probe")
+    record_value.add_argument("--artifact", help="Path inside the challenge workspace")
+    case_record.add_argument("--artifact-summary", help="Why the artifact matters")
+    case_record.add_argument("--confidence", type=int, help="Hypothesis confidence from 0 to 100")
+    case_record.add_argument("--status", choices=("open", "blocked", "solved"), help="Challenge status")
+    case_record.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    swarm = actions.add_parser(
+        "swarm",
+        help="Create CTF workers in the existing Kanban dependency graph",
+        description=(
+            "Create parallel specialist workers plus a verifier and synthesizer "
+            "on the existing Kanban board."
+        ),
+    )
+    swarm.add_argument("challenge", help="Normalized challenge workspace directory")
+    swarm.add_argument(
+        "--worker",
+        action="append",
+        required=True,
+        metavar="PROFILE:TITLE[:SKILL,SKILL]",
+        help="Parallel worker specification; repeat for each specialist",
+    )
+    swarm.add_argument("--verifier", default="ctf-verifier", help="Kanban assignee for evidence gating")
+    swarm.add_argument("--synthesizer", default="ctf-synthesizer", help="Kanban assignee for final synthesis")
+    swarm.add_argument("--board", help="Kanban board slug (default: current board)")
+    swarm.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     pull = actions.add_parser("pull", help="Pull visible challenges and files from CTFd")
     pull.add_argument("--root", help="Workspace root (default: ctf.workspace)")
@@ -112,7 +163,7 @@ def build_ctf_parser(subparsers, *, cmd_ctf: Callable) -> None:
     submit.add_argument(
         "--yes",
         action="store_true",
-        help="Confirm this external side effect",
+        help="Confirm this external side effect (not needed with ctf.auto_submit)",
     )
     submit.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
@@ -125,7 +176,7 @@ def build_ctf_parser(subparsers, *, cmd_ctf: Callable) -> None:
     run.add_argument(
         "--submit",
         action="store_true",
-        help="Allow the solver runner to submit flags (requires CTFd config)",
+        help="Allow the solver runner to submit flags (also enabled by ctf.auto_submit)",
     )
     run.add_argument(
         "--coordinator",

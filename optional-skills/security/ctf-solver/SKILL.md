@@ -20,6 +20,7 @@ toolsets:
   - file
   - web
   - browser
+  - code_execution
   - delegation
 metadata:
   hermes:
@@ -92,6 +93,10 @@ challenge-name/
 
 `distfiles/` is input material. Treat it as read-only. `workspace/` is for generated scripts, patched
 files, decoded artifacts, exploit drafts, and solver notes. `findings.md` is the shared blackboard.
+`workspace/casebook.events.jsonl` is the append-only source of truth for evidence, sandbox outcomes,
+and approval audit events. `workspace/casebook.json` is its compact projection for hypotheses,
+evidence, dead ends, next steps, and artifact paths. It lets a new agent turn or focused worker
+resume without replaying long tool output.
 
 ## Operating Loop
 
@@ -113,21 +118,38 @@ files, decoded artifacts, exploit drafts, and solver notes. `findings.md` is the
    imports, strings, and architecture before deeper work. Completion: `findings.md` states likely
    category, promising attack surfaces, and dead ends already tried.
 
-5. **Choose playbooks.** Load `references/category-playbooks.md` for category-specific commands and
+5. **Create a brief before deep work or delegation.** Run `hermes ctf case brief <challenge-dir>` and
+use its bounded output as worker context. Record each verified fact with `hermes ctf case record`
+instead of relying on chat history alone. Completion: the casebook names active hypotheses, dead ends,
+and a concrete next step.
+
+6. **Choose playbooks.** Load `references/category-playbooks.md` for category-specific commands and
    decision trees. Load `references/sandbox-toolbox.md` when deciding which tool to try next.
    Completion: each active hypothesis has a next command or proof probe.
 
-6. **Delegate when parallelism helps.** Use `delegate_task` for independent angles, not for tiny
+7. **Batch deterministic probes.** When several independent terminal or file probes are needed, use
+`execute_code` to call the existing tools programmatically, write durable output below `workspace/`,
+and print only a compact JSON or Markdown summary. Do not use it for speculative high-risk actions or
+to hide commands from the operator. Completion: one model turn produces a bounded summary and an
+artifact path that is recorded in the casebook.
+
+8. **Delegate when parallelism helps.** Use `delegate_task` for independent angles, not for tiny
    mechanical commands. Give each subagent the metadata, exact paths, scope, current findings, and a
    required output schema. Completion: every subagent returns a flag candidate, evidence, or a useful
    negative result, and the parent verifies important claims.
 
-7. **Verify and submit.** Never report placeholder flags like `CTF{flag}`. Prefer platform submission
+9. **Verify and submit.** Never report placeholder flags like `CTF{flag}`. Prefer platform submission
    over eyeballing. Deduplicate exact flag attempts and slow down after wrong submissions. Completion:
    the platform returns `CORRECT` or `ALREADY SOLVED`, or dry-run evidence is strong enough to label
    the result unsubmitted.
 
-8. **Stop or bump.** When a solver loops, stop repeating the same command. Inject sibling findings and
+   When the operator has enabled `ctf.auto_submit: true`, submit each verified candidate through
+   `hermes ctf submit` immediately; otherwise use `--yes` only after the operator explicitly asks
+   for a live submission. Never attempt privilege elevation to solve a challenge. If Docker, WSL,
+   `sudo`, or UAC reports that administrator permission is required, stop and tell the operator what
+   requires it; wait for their approval before retrying.
+
+10. **Stop or bump.** When a solver loops, stop repeating the same command. Inject sibling findings and
    require a different approach. Completion: either a confirmed flag is found, or the final note lists
    all explored surfaces and why the challenge remains unsolved.
 
@@ -142,8 +164,9 @@ hermes ctf triage ~/ctf-challenges/<challenge-slug> --engine auto --network none
 ```
 
 The triage engine uses Docker automatically when available and keeps `distfiles/` read-only. Network
-access is disabled by default; use `--network host` only for an explicitly authorized challenge
-service.
+access is disabled by default; use `--network host --yes` only for an explicitly authorized challenge
+service. Results expose a stable status (`succeeded`, `command_failed`, `timed_out`, or
+`runner_failed`) and the report records whether sandbox enforcement was full or partial.
 
 Measure operational readiness with a representative local corpus. Each case must provide all five
 workspace artefacts and a trusted `workspace/verify.py`; `--execute` runs each verifier repeatedly and
@@ -158,6 +181,16 @@ The practical score is out of 10: category coverage (3), verifier success (3), r
 and evidence completeness (2). This is a workflow-readiness signal, not a claim that every arbitrary
 challenge can be solved automatically. Keep real challenge corpora private and never place flags or
 tokens in source-controlled fixtures.
+
+For durable parallel work, create workers on the existing Kanban board. The command creates parallel
+specialists followed by a dependency-gated verifier and synthesizer:
+
+```bash
+hermes ctf swarm <challenge-dir> \
+  --worker reverse-worker:"Recover the check" \
+  --worker protocol-worker:"Map service behavior" \
+  --verifier ctf-verifier --synthesizer ctf-synthesizer
+```
 
 ## APK Reversing Mode
 
@@ -224,6 +257,8 @@ ctf:
   agent_dir: ~/src/ctf-agent
   sandbox_image: ctf-sandbox
   max_challenges: 10
+  # Opt in only for an authorized event where verified flags should be scored immediately.
+  auto_submit: true
 ```
 
 ```text
@@ -243,8 +278,8 @@ hermes ctf status --top 20 --json
 For full live automation, `hermes ctf run` delegates to the existing `ctf-agent`
 coordinator when that checkout is available. The coordinator polls CTFd, pulls new
 challenges, starts parallel swarms in the Docker sandbox, verifies submissions, and
-stops work after a solve. It defaults to dry-run submission; add `--submit` only when
-the operator explicitly wants live scoring:
+stops work after a solve. It defaults to dry-run submission; add `--submit` or enable
+`ctf.auto_submit: true` only when the operator explicitly wants live scoring:
 
 ```bash
 hermes ctf run --challenges-dir ~/ctf-challenges
@@ -274,8 +309,9 @@ hermes ctf ad doctor templates/attack-defense.yml
 hermes ctf ad run templates/attack-defense.yml
 ```
 
-Live commands are executed only after the operator opts in with `--live`; state and extracted
-flags are persisted to the configured scoreboard JSON:
+Live commands are executed only after the operator opts in with `--live`; this creates one audited
+approval for the live run, including any configured host-network tool. State and extracted flags are
+persisted to the configured scoreboard JSON:
 
 ```bash
 hermes ctf ad run templates/attack-defense.yml --live --watch --interval 30

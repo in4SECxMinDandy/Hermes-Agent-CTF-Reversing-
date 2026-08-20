@@ -153,6 +153,9 @@ def _run_verifier(case: BenchmarkCase, timeout: float) -> dict[str, Any]:
             "timed_out": False,
             "seconds": round(time.perf_counter() - started, 4),
             "output_sha256": hashlib.sha256((stdout + "\n" + stderr).encode()).hexdigest(),
+            "status": "succeeded" if result.returncode == 0 else "command_failed",
+            "failure_class": "none" if result.returncode == 0 else "command",
+            "execution_mode": "trusted_local_verifier",
         }
     except subprocess.TimeoutExpired as exc:
         stdout = _short_output(str(exc.stdout or ""))
@@ -164,6 +167,9 @@ def _run_verifier(case: BenchmarkCase, timeout: float) -> dict[str, Any]:
             "timed_out": True,
             "seconds": round(time.perf_counter() - started, 4),
             "output_sha256": hashlib.sha256((stdout + "\n" + stderr).encode()).hexdigest(),
+            "status": "timed_out",
+            "failure_class": "timeout",
+            "execution_mode": "trusted_local_verifier",
         }
     except OSError as exc:
         return {
@@ -173,6 +179,9 @@ def _run_verifier(case: BenchmarkCase, timeout: float) -> dict[str, Any]:
             "timed_out": False,
             "seconds": round(time.perf_counter() - started, 4),
             "output_sha256": "",
+            "status": "runner_failed",
+            "failure_class": "runner_unavailable",
+            "execution_mode": "trusted_local_verifier",
         }
 
 
@@ -215,18 +224,26 @@ def run_benchmark(
         if execute:
             record["runs"] = [_run_verifier(case, timeout) for _ in range(repeats)]
             record["passed"] = bool(record["runs"]) and all(
-                run["returncode"] == 0 and not run["timed_out"] for run in record["runs"]
+                run["status"] == "succeeded" for run in record["runs"]
             )
             hashes = {run["output_sha256"] for run in record["runs"]}
             record["reproducible"] = record["passed"] and len(hashes) == 1
+            record["stable_output"] = len(hashes) == 1
+            record["status_counts"] = {
+                status: sum(run["status"] == status for run in record["runs"])
+                for status in ("succeeded", "command_failed", "timed_out", "runner_failed")
+            }
         else:
             record["passed"] = None
             record["reproducible"] = None
+            record["stable_output"] = None
+            record["status_counts"] = None
         case_reports.append(record)
 
     covered = {case["category"] for case in case_reports}
     passed = [case for case in case_reports if case["passed"] is True]
     reproducible = [case for case in case_reports if case["reproducible"] is True]
+    stable_output = [case for case in case_reports if case["stable_output"] is True]
     evidence_ok = [case for case in case_reports if case["evidence_ok"]]
     if execute:
         coverage_score = 3.0 * len(covered & set(BENCHMARK_CATEGORIES)) / len(BENCHMARK_CATEGORIES)
@@ -254,8 +271,16 @@ def run_benchmark(
             "success_rate": round(len(passed) / len(case_reports), 3) if execute else None,
             "reproducible": len(reproducible) if execute else None,
             "reproducibility_rate": round(len(reproducible) / len(case_reports), 3) if execute else None,
+            "stable_output": len(stable_output) if execute else None,
+            "stable_output_rate": round(len(stable_output) / len(case_reports), 3) if execute else None,
             "evidence_rate": round(len(evidence_ok) / len(case_reports), 3),
             "practical_score": practical_score,
+        },
+        "outcome_contract": {
+            "succeeded": "verifier returned exit code 0",
+            "command_failed": "verifier ran and returned a non-zero exit code",
+            "timed_out": "verifier exceeded the per-run timeout",
+            "runner_failed": "the verifier process could not be started",
         },
     }
     if report_path:

@@ -15,6 +15,7 @@ import yaml
 
 from hermes_cli.ctf import CTFError
 from hermes_cli.ctf_benchmark import _slug_category
+from hermes_cli.ctf_casebook import append_casebook_event, initialize_casebook, record_casebook
 
 _TRIAGE_SCRIPTS = {
     "web": (
@@ -115,6 +116,41 @@ def _run(command: list[str], *, cwd: Path, timeout: float) -> dict[str, Any]:
         }
 
 
+def _normalize_result(result: Mapping[str, Any], *, engine: str) -> dict[str, Any]:
+    """Expose stable runner/command outcomes to callers and benchmarks."""
+    normalized = dict(result)
+    returncode = normalized.get("returncode")
+    stderr = str(normalized.get("stderr") or "").lower()
+    timed_out = bool(normalized.get("timed_out"))
+    runner_error = any(
+        marker in stderr
+        for marker in (
+            "cannot connect to the docker daemon",
+            "is the docker daemon running",
+            "unable to find image",
+            "docker: permission denied",
+            "no such file or directory",
+            "executable file not found",
+        )
+    )
+    if timed_out:
+        status, failure_class = "timed_out", "timeout"
+    elif returncode == 0:
+        status, failure_class = "succeeded", "none"
+    elif runner_error:
+        status, failure_class = "runner_failed", "runner_unavailable"
+    else:
+        status, failure_class = "command_failed", "command"
+    normalized.update(
+        {
+            "status": status,
+            "failure_class": failure_class,
+            "execution_engine": engine,
+        }
+    )
+    return normalized
+
+
 def _append_findings(challenge_dir: Path, report_path: Path, category: str, engine: str) -> None:
     findings = challenge_dir / "findings.md"
     if not findings.exists():
@@ -177,13 +213,13 @@ def run_triage(
             "-lc",
             script,
         ]
-        result = _run(command, cwd=challenge_dir, timeout=timeout)
+        result = _normalize_result(_run(command, cwd=challenge_dir, timeout=timeout), engine="docker")
         selected_engine = "docker"
     else:
         shell = shutil.which("bash") or shutil.which("sh")
         if not shell:
             raise CTFError("Local triage needs a POSIX shell; use --engine docker")
-        result = _run([shell, "-lc", script], cwd=challenge_dir, timeout=timeout)
+        result = _normalize_result(_run([shell, "-lc", script], cwd=challenge_dir, timeout=timeout), engine="local")
         selected_engine = "local"
     triage_dir = challenge_dir / "workspace" / "triage"
     triage_dir.mkdir(parents=True, exist_ok=True)
@@ -195,9 +231,34 @@ def run_triage(
         "category": category,
         "engine": selected_engine,
         "network": network,
+        "sandbox": {
+            "status": "enforced" if selected_engine == "docker" else "partial",
+            "network": network,
+            "network_isolated": selected_engine == "docker" and network == "none",
+            "distfiles_read_only": selected_engine == "docker",
+            "workspace_writable": True,
+        },
         "result": result,
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _append_findings(challenge_dir, report_path, category, selected_engine)
+    initialize_casebook(challenge_dir, metadata)
+    append_casebook_event(
+        challenge_dir,
+        "sandbox_run",
+        {
+            "engine": selected_engine,
+            "network": network,
+            "status": result.get("status"),
+            "failure_class": result.get("failure_class"),
+            "report": report_path.relative_to(challenge_dir).as_posix(),
+        },
+    )
+    record_casebook(
+        challenge_dir,
+        artifact=report_path,
+        artifact_summary=f"Automated {category} triage via {selected_engine}; inspect before escalating.",
+        next_step="Review the triage report and record one evidence-backed hypothesis before deeper analysis.",
+    )
     report["report_path"] = str(report_path)
     return report
